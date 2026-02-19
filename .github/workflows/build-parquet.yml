@@ -1,0 +1,54 @@
+name: build-latest-parquet
+
+on:
+  schedule:
+    - cron: "0 15 * * 1-5" # UTC 15:00 = JST 00:00（火〜土 深夜）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-latest-parquet
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build parquet
+        env:
+          MASTER_CSV_URL: "https://raw.githubusercontent.com/skr-works/ticker-master-japan/refs/heads/main/data/master.csv"
+          MAX_WORKERS: "2"
+          CHUNK_SIZE: "50"
+          CHUNK_SLEEP_MIN: "3.0"
+          CHUNK_SLEEP_MAX: "5.0"
+        run: |
+          python scripts/build_latest_parquet.py
+          ls -lh latest_stock_data.parquet
+
+      - name: Upload to GitHub Release (latest-data)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eux
+          test -f latest_stock_data.parquet
+
+          if gh release view latest-data > /dev/null 2>&1; then
+            gh release upload latest-data latest_stock_data.parquet --clobber
+          else
+            gh release create latest-data latest_stock_data.parquet --title "Latest Stock Data" --notes "Automated daily update"
+          fi
