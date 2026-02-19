@@ -37,7 +37,8 @@ jobs:
           CHUNK_SLEEP_MIN: "3.0"
           CHUNK_SLEEP_MAX: "5.0"
         run: |
-          python scripts/build_latest_parquet.py
+          ls -la
+          python build_latest_parquet.py
           ls -lh latest_stock_data.parquet
 
       - name: Upload to GitHub Release (latest-data)
