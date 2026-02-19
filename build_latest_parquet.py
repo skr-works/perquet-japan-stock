@@ -48,7 +48,9 @@ THROTTLE_RATIO = float(os.getenv("THROTTLE_RATIO", "0.45"))
 
 # バリデーション（最低限）
 MIN_ROWS = int(os.getenv("MIN_ROWS", "3500"))
-MIN_BYTES = int(os.getenv("MIN_BYTES", str(1_048_576)))  # 1MB
+# Parquet(zstd)は圧縮が強く、サイズで品質判定すると偽陽性が起きる。
+# デフォルトではサイズ検査を無効化（MIN_BYTES <= 0 でスキップ）。
+MIN_BYTES = int(os.getenv("MIN_BYTES", "0"))
 MAX_PRICE_NA_RATIO = float(os.getenv("MAX_PRICE_NA_RATIO", "0.05"))
 
 
@@ -97,6 +99,7 @@ SCHEMA = pa.schema([
 
 TO_OKU = 100_000_000.0
 
+
 def _to_float(x: Any) -> float:
     try:
         if x is None:
@@ -107,6 +110,7 @@ def _to_float(x: Any) -> float:
         return float(v) if pd.notna(v) else np.nan
     except Exception:
         return np.nan
+
 
 def _to_int32_nullable(x: Any) -> Optional[int]:
     try:
@@ -121,12 +125,14 @@ def _to_int32_nullable(x: Any) -> Optional[int]:
     except Exception:
         return None
 
+
 def _safe_div(a: float, b: float) -> float:
     if b is None or b == 0 or pd.isna(b):
         return np.nan
     if a is None or pd.isna(a):
         return np.nan
     return a / b
+
 
 def _round_or_nan(x: float, ndigits: int) -> float:
     if x is None or pd.isna(x):
@@ -136,13 +142,16 @@ def _round_or_nan(x: float, ndigits: int) -> float:
     except Exception:
         return np.nan
 
+
 def _is_throttle_error(msg: str) -> bool:
     m = (msg or "").lower()
     keys = ["429", "too many requests", "rate limit", "forbidden", "403", "temporarily unavailable"]
     return any(k in m for k in keys)
 
+
 def _now_utc_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+
 
 def _sleep_rand(a: float, b: float) -> None:
     time.sleep(random.uniform(a, b))
@@ -160,6 +169,7 @@ def _get_value(df: pd.DataFrame, keys: List[str], date_col: Any) -> float:
             return _to_float(df.loc[k, date_col])
     return np.nan
 
+
 def _get_eps_for_date(financials: pd.DataFrame, date_col: Any) -> float:
     # Basic EPSがあればそれ、なければ NetIncome / Shares を試みる
     eps = _get_value(financials, ["Basic EPS", "Earnings Per Share Basic"], date_col)
@@ -171,6 +181,7 @@ def _get_eps_for_date(financials: pd.DataFrame, date_col: Any) -> float:
     if (not pd.isna(ni)) and (not pd.isna(shares)) and shares > 0:
         return ni / shares
     return np.nan
+
 
 def _calc_growth_median(financials: pd.DataFrame, dates: List[Any]) -> Tuple[float, float, List[float]]:
     """
@@ -207,6 +218,7 @@ def _calc_growth_median(financials: pd.DataFrame, dates: List[Any]) -> Tuple[flo
 
     g_raw = g_list[0] if g_list else np.nan
     return final_g, g_raw, g_list
+
 
 def _calc_dividend_metrics(stock: yf.Ticker, current_price: float) -> Tuple[float, Optional[int]]:
     """
@@ -259,6 +271,7 @@ def _calc_dividend_metrics(stock: yf.Ticker, current_price: float) -> Tuple[floa
 
     return div_yield, int(streak)
 
+
 def _calc_earnings(stock: yf.Ticker) -> Tuple[Optional[str], Optional[str]]:
     """
     earnings_date(YYYY-MM-DD), earnings_alert("1ヶ月以内" or null)
@@ -293,7 +306,13 @@ def _calc_earnings(stock: yf.Ticker) -> Tuple[Optional[str], Optional[str]]:
         pass
     return earnings_alert, earnings_date
 
-def _calc_intangibles_adj_pbr(financials: pd.DataFrame, balance_sheet: pd.DataFrame, equity: float, market_cap_yen: float) -> Tuple[float, float, float]:
+
+def _calc_intangibles_adj_pbr(
+    financials: pd.DataFrame,
+    balance_sheet: pd.DataFrame,
+    equity: float,
+    market_cap_yen: float
+) -> Tuple[float, float, float]:
     """
     latest_i_int(円), k_int(円), adj_pbr を推計（あなたの既存ロジック簡易移植）
     """
@@ -315,8 +334,12 @@ def _calc_intangibles_adj_pbr(financials: pd.DataFrame, balance_sheet: pd.DataFr
 
     try:
         rnd = _get_series(["Research And Development", "Research Development", "Research & Development"])
-        sga = _get_series(["Selling General And Administration", "Selling General and Administrative",
-                           "Selling, General And Administration", "Selling, General and Administrative"])
+        sga = _get_series([
+            "Selling General And Administration",
+            "Selling General and Administrative",
+            "Selling, General And Administration",
+            "Selling, General and Administrative"
+        ])
         i_int = rnd + (0.3 * sga)
 
         k_int = 0.0
@@ -328,9 +351,11 @@ def _calc_intangibles_adj_pbr(financials: pd.DataFrame, balance_sheet: pd.DataFr
         latest_i_int = abs(float(i_int.iloc[0])) if not i_int.empty else np.nan
 
         latest_date_bs = balance_sheet.columns[0] if not balance_sheet.empty else None
-        total_intangibles = _get_value(balance_sheet,
-                                       ["Goodwill And Other Intangible Assets", "Intangible Assets", "Other Intangible Assets"],
-                                       latest_date_bs)
+        total_intangibles = _get_value(
+            balance_sheet,
+            ["Goodwill And Other Intangible Assets", "Intangible Assets", "Other Intangible Assets"],
+            latest_date_bs
+        )
         if pd.isna(total_intangibles) or total_intangibles == 0:
             goodwill = _get_value(balance_sheet, ["Goodwill"], latest_date_bs)
             other = _get_value(balance_sheet, ["Other Intangible Assets"], latest_date_bs)
@@ -348,10 +373,21 @@ def _calc_intangibles_adj_pbr(financials: pd.DataFrame, balance_sheet: pd.DataFr
     except Exception:
         return np.nan, np.nan, np.nan
 
-def _grade_and_target(current_price: float, per: float, roic: float, final_g: float,
-                      psr: float, equity_ratio: float, net_de_ratio: float,
-                      div_yield: float, div_streak: Optional[int],
-                      op_cf_3yr_avg: float, adj_pbr: float, pbr: float) -> Tuple[Optional[str], float, float]:
+
+def _grade_and_target(
+    current_price: float,
+    per: float,
+    roic: float,
+    final_g: float,
+    psr: float,
+    equity_ratio: float,
+    net_de_ratio: float,
+    div_yield: float,
+    div_streak: Optional[int],
+    op_cf_3yr_avg: float,
+    adj_pbr: float,
+    pbr: float
+) -> Tuple[Optional[str], float, float]:
     """
     grade, target_price, upside を推計（あなたの既存ロジック準拠）
     """
@@ -362,14 +398,20 @@ def _grade_and_target(current_price: float, per: float, roic: float, final_g: fl
 
     # ROIC
     if not pd.isna(roic):
-        if roic >= 15: score += 3
-        elif roic >= 10: score += 2
-        elif roic >= 8: score += 1
+        if roic >= 15:
+            score += 3
+        elif roic >= 10:
+            score += 2
+        elif roic >= 8:
+            score += 1
 
     # 成長率
-    if valid_g >= 15: score += 3
-    elif valid_g >= 7: score += 2
-    elif valid_g > 0: score += 1
+    if valid_g >= 15:
+        score += 3
+    elif valid_g >= 7:
+        score += 2
+    elif valid_g > 0:
+        score += 1
 
     # 割安
     if (not pd.isna(psr)) and psr > 0 and psr < 0.8:
@@ -386,8 +428,10 @@ def _grade_and_target(current_price: float, per: float, roic: float, final_g: fl
 
     # 財務
     if not pd.isna(net_de_ratio):
-        if net_de_ratio < 0: score += 1
-        elif net_de_ratio > 1.0: score -= 1
+        if net_de_ratio < 0:
+            score += 1
+        elif net_de_ratio > 1.0:
+            score -= 1
 
     if (not pd.isna(div_yield)) and div_yield >= 3.0:
         score += 1
@@ -414,14 +458,20 @@ def _grade_and_target(current_price: float, per: float, roic: float, final_g: fl
 
     # target_per
     target_per = 15.0
-    if valid_g > 20: target_per = 25.0
-    elif valid_g > 10: target_per = 20.0
-    elif valid_g < 0: target_per = 10.0
+    if valid_g > 20:
+        target_per = 25.0
+    elif valid_g > 10:
+        target_per = 20.0
+    elif valid_g < 0:
+        target_per = 10.0
 
     if not pd.isna(roic):
-        if roic > 15: target_per *= 1.15
-        elif roic >= 10: target_per *= 1.05
-        elif roic < 5: target_per *= 0.9
+        if roic > 15:
+            target_per *= 1.15
+        elif roic >= 10:
+            target_per *= 1.05
+        elif roic < 5:
+            target_per *= 0.9
 
     if target_per > 25:
         target_per = 25.0
@@ -447,6 +497,7 @@ def _grade_and_target(current_price: float, per: float, roic: float, final_g: fl
 class ErrorStats:
     lock: Lock
     recent: List[bool]  # throttle error flags（直近）
+
     def push(self, is_throttle: bool) -> None:
         with self.lock:
             self.recent.append(is_throttle)
@@ -711,11 +762,8 @@ def fetch_one(code: str, name: str, sector: str, estats: ErrorStats) -> Dict[str
 def load_master(url: str) -> pd.DataFrame:
     r = requests.get(url, timeout=20)
     r.raise_for_status()
-    # UTF-8前提
     from io import StringIO
     df = pd.read_csv(StringIO(r.text))
-    # 想定: code,name,sector
-    # codeは文字列にしておく
     df["code"] = df["code"].astype(str).str.strip()
     df["name"] = df.get("name", "").astype(str)
     df["sector"] = df.get("sector", "").astype(str)
@@ -723,24 +771,23 @@ def load_master(url: str) -> pd.DataFrame:
     df = df.drop_duplicates(subset=["code"], keep="last")
     return df
 
+
 def enforce_schema(df: pd.DataFrame) -> pa.Table:
-    # 列順を揃える
     df = df[[f.name for f in SCHEMA]]
 
-    # pandas側のdtypeを寄せる（arrow変換事故を減らす）
     int_cols = ["div_streak"]
     for c in int_cols:
         df[c] = df[c].astype("Int32")  # nullable
 
     float_cols = [
-        "price","target_price","upside","peg","roic","final_g","psr","equity_ratio","div_yield",
-        "market_cap","roe","roa","op_cf_margin","per","pbr","adj_pbr","cash","debt","net_de_ratio",
-        "g_raw","op_raw","latest_i_int","k_int"
+        "price", "target_price", "upside", "peg", "roic", "final_g", "psr", "equity_ratio", "div_yield",
+        "market_cap", "roe", "roa", "op_cf_margin", "per", "pbr", "adj_pbr", "cash", "debt", "net_de_ratio",
+        "g_raw", "op_raw", "latest_i_int", "k_int"
     ]
     for c in float_cols:
         df[c] = pd.to_numeric(df[c], errors="coerce").astype("float64")
 
-    str_cols = ["code","name","sector","grade","earnings_alert","earnings_date"]
+    str_cols = ["code", "name", "sector", "grade", "earnings_alert", "earnings_date"]
     for c in str_cols:
         df[c] = df[c].where(df[c].notna(), None)
         df[c] = df[c].astype("object")
@@ -755,23 +802,25 @@ def enforce_schema(df: pd.DataFrame) -> pa.Table:
     table = table.replace_schema_metadata(meta)
     return table
 
+
 def validate_and_finalize(tmp_path: str, out_path: str, df: pd.DataFrame) -> None:
     # A 行数
     if len(df) < MIN_ROWS:
         raise RuntimeError(f"VALIDATION_FAIL: rows={len(df)} < {MIN_ROWS}")
 
     # B サイズ
-    size = os.path.getsize(tmp_path)
-    if size < MIN_BYTES:
-        raise RuntimeError(f"VALIDATION_FAIL: bytes={size} < {MIN_BYTES}")
+    if MIN_BYTES > 0:
+        size = os.path.getsize(tmp_path)
+        if size < MIN_BYTES:
+            raise RuntimeError(f"VALIDATION_FAIL: bytes={size} < {MIN_BYTES}")
 
     # C 欠損率（price）
     na_ratio = float(df["price"].isna().mean())
     if na_ratio > MAX_PRICE_NA_RATIO:
         raise RuntimeError(f"VALIDATION_FAIL: price_na_ratio={na_ratio:.4f} > {MAX_PRICE_NA_RATIO}")
 
-    # OKならリネーム
     shutil.move(tmp_path, out_path)
+
 
 def main() -> int:
     print(f"[INFO] MASTER_CSV_URL={MASTER_CSV_URL}")
@@ -783,10 +832,10 @@ def main() -> int:
     estats = ErrorStats(lock=Lock(), recent=[])
 
     results: List[Dict[str, Any]] = []
-    codes = master[["code","name","sector"]].to_dict("records")
+    codes = master[["code", "name", "sector"]].to_dict("records")
 
     for i in range(0, len(codes), CHUNK_SIZE):
-        chunk = codes[i:i+CHUNK_SIZE]
+        chunk = codes[i:i + CHUNK_SIZE]
         print(f"[INFO] chunk {i+1}-{min(i+CHUNK_SIZE, len(codes))} / {len(codes)}")
 
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
@@ -815,7 +864,6 @@ def main() -> int:
     df["name"] = master.set_index("code").loc[df["code"], "name"].to_numpy()
     df["sector"] = master.set_index("code").loc[df["code"], "sector"].to_numpy()
 
-    # スキーマ適用してParquet出力
     table = enforce_schema(df)
     pq.write_table(table, TMP_NAME, compression="zstd")
     print(f"[INFO] wrote {TMP_NAME} bytes={os.path.getsize(TMP_NAME)} rows={len(df)}")
@@ -823,6 +871,7 @@ def main() -> int:
     validate_and_finalize(TMP_NAME, OUT_NAME, df)
     print(f"[OK] finalized {OUT_NAME} bytes={os.path.getsize(OUT_NAME)}")
     return 0
+
 
 if __name__ == "__main__":
     try:
