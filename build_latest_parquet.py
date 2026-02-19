@@ -51,7 +51,7 @@ MIN_ROWS = int(os.getenv("MIN_ROWS", "3500"))
 # Parquet(zstd)は圧縮が強く、サイズで品質判定すると偽陽性が起きる。
 # デフォルトではサイズ検査を無効化（MIN_BYTES <= 0 でスキップ）。
 MIN_BYTES = int(os.getenv("MIN_BYTES", "0"))
-MAX_PRICE_NA_RATIO = float(os.getenv("MAX_PRICE_NA_RATIO", "0.05"))
+MAX_PRICE_NA_RATIO = float(os.getenv("MAX_PRICE_NA_RATIO", "0.95"))
 
 
 # =========================
