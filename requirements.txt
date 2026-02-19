@@ -1,0 +1,6 @@
+pandas
+numpy
+pyarrow
+yfinance
+requests
+urllib3
