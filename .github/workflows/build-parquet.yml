@@ -1,34 +1,41 @@
 name: build-latest-parquet
-
 on:
   schedule:
     - cron: "0 15 * * 1-5" # UTC 15:00 = JST 00:00（火〜土 深夜）
   workflow_dispatch:
-
 permissions:
   contents: write
-
 concurrency:
   group: build-latest-parquet
   cancel-in-progress: true
-
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 0
+      - name: Keep alive (empty commit if 50+ days since last commit)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          LAST=$(git log -1 --format="%ct")
+          NOW=$(date +%s)
+          DIFF=$(( (NOW - LAST) / 86400 ))
+          echo "Days since last commit: $DIFF"
+          if [ "$DIFF" -ge 50 ]; then
+            git commit --allow-empty -m "chore: keep alive [skip ci]"
+            git push
+          fi
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
       - name: Build parquet
         env:
           MASTER_CSV_URL: "https://raw.githubusercontent.com/skr-works/ticker-master-japan/refs/heads/main/data/master.csv"
@@ -40,14 +47,12 @@ jobs:
           ls -la
           python build_latest_parquet.py
           ls -lh latest_stock_data.parquet
-
       - name: Upload to GitHub Release (latest-data)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eux
           test -f latest_stock_data.parquet
-
           if gh release view latest-data > /dev/null 2>&1; then
             gh release upload latest-data latest_stock_data.parquet --clobber
           else
